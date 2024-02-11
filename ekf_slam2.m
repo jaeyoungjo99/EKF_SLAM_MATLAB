@@ -29,6 +29,8 @@ detection_range = 4.0;
 simulationTime = 80; % 시뮬레이션 시간 (초)
 dt = 1; % 시간 간격 (초)
 sim_pause = 0.0;
+use_association = true;
+max_association_dist = 1.0;
 
 % EKF SLAM 초기화
 slamState = [robotPose; zeros(numLandmarks*2, 1)]; % 로봇 상태 및 랜드마크 위치
@@ -41,8 +43,9 @@ observationNoise = [0.3, 0;
                     0, 10*pi/180.0]; % 관측 노이즈
 sim_observationNoise = [0.1 3*pi/180.0];
 
+known_landmark_idx = 0;
 % 이미 위치 아는 랜드마크
-% idx = 2;
+% idx = 7;
 % slamCovariance(3 + idx*2-1:3 + idx*2, 3 + idx*2-1:3 + idx*2) = eye(2)*0.0;
 
 figure;
@@ -68,20 +71,54 @@ for t = 0:dt:simulationTime
     [slamState, slamCovariance] = ekfPrediction(slamState, slamCovariance, ...
         velocity+sim_motionNoise(1)*(rand-0.5), yawRate+sim_motionNoise(2)*(rand-0.5), motionNoise, dt);
     % 관측 및 EKF 갱신
-    for i = 1:numLandmarks
+    for idx_detect_lm = 1:numLandmarks
 
-        if sqrt((robotPose(1)-landmarks(1,i))^2 + (robotPose(2)-landmarks(2,i))^2) > detection_range
+        iter_true_landmark = landmarks(1:2,idx_detect_lm);
+        is_new_landmark = false;
+        
+        % 관측거리 내에 있는지 확인
+        sim_distance = sqrt((robotPose(1)-iter_true_landmark(1))^2 + (robotPose(2)-iter_true_landmark(2))^2);
+        if sim_distance > detection_range
             continue
         end
 
-        line([robotPose(1) landmarks(1,i)], [robotPose(2) landmarks(2,i)], ...
+        line([robotPose(1) iter_true_landmark(1)], [robotPose(2) iter_true_landmark(2)], ...
             'Color','red','LineStyle','--');
+        
+        z = observeLandmark(robotPose, iter_true_landmark, sim_observationNoise); % sim
+        
+        nearest_dist = 1000;
+        
+        associated_lm_idx = 0;
+        for idx_state_lm = 1:numLandmarks
+            if landmarkInit(idx_state_lm) == 0
+                continue; % 아직 모르는 랜드마크는 패스
+            end
 
-        z = observeLandmark(robotPose, landmarks(:,i), sim_observationNoise); % sim
+            [detected_lm_x, detected_lm_y] = observeToLandmark(z,slamState(1:3));
+            dist_lm_detect = sqrt((detected_lm_x - slamState(3+2*idx_state_lm-1))^2 + ...
+                                    (detected_lm_y - slamState(3+2*idx_state_lm))^2);
+            if dist_lm_detect < nearest_dist && dist_lm_detect < max_association_dist
+                associated_lm_idx = idx_state_lm;
+            end
+        end
+        
+        % 연관 lm 없음, 새로 추가!
+        if associated_lm_idx == 0
+            known_landmark_idx = known_landmark_idx+1;
+            landmarkInit(known_landmark_idx) = 1;
+            associated_lm_idx = known_landmark_idx;
+            is_new_landmark = true;
+        end
+
+        if associated_lm_idx > numLandmarks
+            continue;
+        end
+        
         [slamState, slamCovariance] = ekfUpdate(slamState, slamCovariance, ...
-            z, i, observationNoise,landmarkInit);
+            z, associated_lm_idx, observationNoise,is_new_landmark);
+        
 
-        landmarkInit(i) = 1;
     end
     
     landmarkPoses = reshape(slamState(4:(3+numLandmarks*2)), 2, []);
@@ -177,13 +214,21 @@ function z = observeLandmark(pose, landmark, noise)
     z = [r + noise(1)*(rand-0.5); phi + noise(2)*(rand-0.5)];
 end
 
+
+function [x,y] = observeToLandmark(z, pose)
+    % 로봇 포즈로부터 랜드마크까지의 벡터 계산
+    x = pose(1) + z(1)*cos(z(2) + pose(3));
+    y = pose(2) + z(1)*sin(z(2) + pose(3));
+end
+
 % EKF 갱신 단계 함수
-function [newState, newCovariance] = ekfUpdate(state, covariance, z, landmarkIndex, noise,landmarkInit)
+function [newState, newCovariance] = ekfUpdate(state, covariance, z, landmarkIndex, noise,is_new)
     landmark_num = (length(state) - 3)/2;
+
 
     % 랜드마크의 위치 추정
 
-    if landmarkInit(landmarkIndex) == 0 % new landmark!
+    if is_new == true % new landmark!
         
         state(3+2*landmarkIndex-1) = state(1) + z(1)*cos(z(2) + state(3));
         state(3+2*landmarkIndex) = state(2) + z(1)*sin(z(2) + state(3));
@@ -299,4 +344,5 @@ function plotSlamCovariance(slamCovariance)
 
     % hold off;
 end
+
 
