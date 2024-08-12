@@ -81,7 +81,6 @@ function [estimated_state, error] = eif(P0, Q, R, GT_val, sensor_val, input)
 
         % Information matrix 예측 단계:
         % \Lambda_{k|k-1} = (F_k \Lambda_{k-1|k-1} F_k^T + Q_k)^{-1}
-        % information_matrix_pri(:,:,idxSim) = inv(F_jacob * information_matrix_pos(:,:,idxSim-1) * F_jacob' + Q);
         information_matrix_pri(:,:,idxSim) = inv(F_jacob * inv(information_matrix_pos(:,:,idxSim-1)) * F_jacob' + Q);
 
         % Information vector 예측 단계:
